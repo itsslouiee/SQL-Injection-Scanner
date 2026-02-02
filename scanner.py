@@ -40,7 +40,6 @@ def print_vuln_summary(all_vulns):
         print(f" [{i}] {vuln['type']}  (source: {vuln.get('source', 'unknown')})")
         print(f"     Param:      {vuln.get('param', '?')}")
         print(f"     Payload:    {vuln['payload']}")
-        print(f"     Confidence: {vuln['confidence']}")
         if 'database' in vuln:
             print(f"     Database:   {vuln['database']}")
         if 'delay' in vuln:
@@ -48,6 +47,10 @@ def print_vuln_summary(all_vulns):
         if 'true_similarity' in vuln:
             print(f"     TRUE sim:   {vuln['true_similarity']}")
             print(f"     FALSE sim:  {vuln['false_similarity']}")
+        if 'columns' in vuln:
+            print(f"     Columns:    {vuln['columns']}")
+            if 'markers_found' in vuln:
+                print(f"     Markers:    {', '.join(vuln['markers_found'])}")
         print()
 
     print(f"{'='*70}\n")
@@ -104,4 +107,4 @@ if __name__ == "__main__":
     if not target.startswith(('http://', 'https://')):
         target = 'http://' + target
 
-    scan(target)
+    scan(target) 

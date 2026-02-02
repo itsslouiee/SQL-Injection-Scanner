@@ -1,65 +1,154 @@
 # SQL Injection Vulnerability Scanner
 
-⚠️ **FOR AUTHORIZED SECURITY TESTING ONLY**
+⚠️ **FOR Educational and Authorized Use Only**
 
-This tool is designed for security professionals, penetration testers, and developers to identify SQL injection vulnerabilities in web applications. **Only use this scanner on systems you own or have explicit written permission to test.** Unauthorized testing is illegal and unethical.
-
-
-## Overview
-
-A Python-based SQL injection scanner that employs multiple detection techniques to identify vulnerabilities in web application forms. The scanner systematically tests input fields using various payloads and analyzes responses to determine if SQL injection is possible.
+This project is a **SQL injection detection tool** written in Python.
+It was built to understand how different SQL injection techniques work in practice, how web applications respond to them, and how automated scanners reason about evidence.
+**Only use it  on systems you own or have explicit written permission to test.** Unauthorized testing is illegal and unethical.
 
 
 ## How SQL Injection Works
 
-SQL injection occurs when user input is incorporated into SQL queries without proper sanitization. Attackers can manipulate these queries to bypass authentication, access unauthorized data, modify databases, or execute administrative operations.
+SQL injection occurs when user input is incorporated into SQL queries without proper sanitization. Attackers can manipulate these queries to:
+- Bypass authentication
+- Access unauthorized data
+- Modify or delete database records
+- Execute administrative operations on the database
+
+**Example of a vulnerable query:**
+```sql
+SELECT * FROM users WHERE username = 'USER_INPUT' AND password = 'USER_INPUT'
+```
+
+If `USER_INPUT` is not sanitized, an attacker could inject into it: `' OR '1'='1`
+
+**Resulting query:**
+```sql
+SELECT * FROM users WHERE username = '' OR '1'='1' AND password = '' OR '1'='1'
+```
+This returns all users, bypassing authentication.
 
 
 ## Detection Methodologies
 
-This scanner implements three basic SQL injection detection techniques:
+This scanner implements four SQL injection detection techniques:
 
 ### 1. Error-Based Detection
 
-**Principle:** Injects malformed SQL syntax to trigger database error messages.
+**How it works:**  
+Injects malformed SQL syntax to trigger database error messages that appear in the HTTP response.
 
-The scanner sends specially crafted payloads (such as single quotes, double quotes, or SQL-specific characters) that intentionally break SQL syntax. If the application returns database-specific error messages in the response, it indicates that user input is being directly incorporated into SQL queries without proper sanitization.
+**Technique:**  
+The scanner sends payloads like `'`, `"`, `' OR '1'='1` that intentionally break SQL syntax. If the application returns database-specific error messages, it proves that user input is being directly incorporated into SQL queries without proper sanitization. This definitively proves that there's a vulnerability.
 
-**Advantages:**
-- Fast and reliable
-- Definitively proves vulnerability when errors are exposed
-- Enables database fingerprinting for targeted exploitation
 
 ### 2. Boolean-Based Blind SQL Injection
 
-**Principle:** Exploits conditional logic by comparing responses to TRUE and FALSE SQL conditions.
+**How it works:**  
+This technique is used when error messages are suppressed. The scanner injects SQL conditions that evaluate to TRUE or FALSE and then compares these responses to determine if the injected SQL is being executed.
 
-This technique is used when error messages are suppressed. The scanner injects SQL conditions that evaluate to TRUE or FALSE and uses response comparison (diffing) to determine if the injected SQL is being executed. By analyzing differences in HTTP responses between TRUE and FALSE conditions, the scanner can confirm SQL injection even without visible error messages.
+**Technique:**  
+When error messages are suppressed, the scanner injects two payloads:
+- `' AND '1'='1` (always TRUE)
+- `' AND '1'='2` (always FALSE)
 
-**Advantages:**
-- Works when error messages are hidden
-- Utilizes algorithmic response comparison for accuracy
+The scanner compares the responses using similarity analysis. If the TRUE response matches the baseline but the FALSE response differs significantly, it proves the SQL is being executed.
+
+**Example:**
+```sql
+-- Original query
+SELECT * FROM products WHERE id = 1
+
+-- TRUE injection
+SELECT * FROM products WHERE id = 1 AND '1'='1'  -- Returns product 1
+
+-- FALSE injection
+SELECT * FROM products WHERE id = 1 AND '1'='2'  -- Returns nothing
+```
+
 
 ### 3. Time-Based Blind SQL Injection
 
-**Principle:** Measures response time delays to detect SQL execution.
+**How it works:**  
+Injects database-specific sleep commands and measures response time delays to detect SQL execution.
 
-When applications neither display errors nor show visible differences between TRUE/FALSE conditions, time-based detection can still identify vulnerabilities. The scanner injects database-specific sleep commands and measures response times. If the server delays its response by the specified duration, it proves that the injected SQL is being executed.
+**Technique:**  
+When applications show no visible differences between responses, the scanner injects time delay functions:
+- MySQL: `' AND SLEEP(5)--`
+- MSSQL: `'; WAITFOR DELAY '0:0:5'--`
 
-**Advantages:**
-- Most comprehensive detection method
-- Works when all other detection methods fail
+The time delay is a side-channel signal. The database executes the SLEEP command, causing a measurable delay ( approximately 5 seconds), which proves that the injected SQL is being executed regardless of what the page displays.
 
+**Example:**
+```sql
+-- Original query
+SELECT * FROM products WHERE id = 1
 
-## Additional Detection Techniques (Not Implemented)
-
-While this scanner focuses on the three primary detection methods, several other advanced techniques exist in professional SQL injection testing:
-
-- **UNION-based SQL Injection** - Combines query results to extract data directly
-- **Out-of-Band SQL Injection** - Exfiltrates data through alternative channels (DNS, HTTP)
-- **Second-Order SQL Injection** - Exploits stored data that is later used in vulnerable queries
-- **Stack Queries** - Executes multiple SQL statements in a single injection
-
-These techniques require more complex implementation and specific server configurations.
+-- Time-based injection
+SELECT * FROM products WHERE id = 1 AND SLEEP(5)--
+```
 
 
+### 4. UNION-Based SQL Injection
+
+**How it works:**  
+Unlike other techniques that infer SQL execution from behavior, UNION-based detection Uses SQL UNION operator to combine the original query with an attacker-controlled query and provides direct evidence: if our unique markers appear in the response, the database definitely executed our SQL and returned our values. This is proof of SQL injection.
+
+**Technique:**  
+The scanner first determines the number of columns in the original query using `ORDER BY`, then tests UNION with unique marker values:
+
+**Step 1 - Find column count:**
+```sql
+' ORDER BY 1--  
+' ORDER BY 2--  
+' ORDER BY 3--  --error
+Conclusion: 2 columns
+```
+
+**Step 2 - Test UNION with markers:**
+```sql
+' UNION SELECT 1337,7331--
+```
+
+The scanner then checks if the unique markers (1337, 7331) appear in the HTTP response.
+
+**Why markers are used:**
+Markers don't need to exist in the database. They are literal values returned by the SQL engine itself. Their appearance in the response is direct proof of successful UNION execution.
+
+**NOTE**  
+Once a UNION-based injection is confirmed, it can be used to extract actual data from the database by replacing markers with real column names like `username` or `password`.
+
+
+
+## Implementation Details
+
+**Target Extraction:**  
+The scanner automatically identifies:
+- HTML forms (POST and GET methods)
+- URL parameters (GET requests)
+- Hidden form fields
+
+**Request Handling:**  
+- Maintains session state
+- Uses realistic User-Agent headers
+- Implements configurable timeouts
+- Handles both GET and POST requests
+
+**Detection Logic:**  
+Each detection method runs independently and reports findings.
+
+
+## Usage
+```bash
+python scanner.py
+```
+
+## Limitations
+This scanner detects SQL injection by analyzing how the application responds to different inputs. It may not always produce accurate results and can miss certain vulnerabilities or report false positives depending on how the website behaves. Always manually verify any findings before reporting them.
+
+
+## License 
+This project is intended for educational and learning purposes only.
+
+## Author 
+**itsslouiee** 
